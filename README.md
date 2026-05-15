@@ -1,4 +1,4 @@
-![SENSING](./images/SENSING.jpg)
+![SENSING](./images/SENSING.png)
 # SENSING Camera models for NVIDIA Omniverse
 
 ## Supported models

@@ -133,7 +133,7 @@ class Joint:
 # conversion
 # --------------------------------------------------------------------------- #
 def convert(usd_path: Path, out_dir: Path, *, mass=None, collision=True,
-            verbose=True) -> dict:
+            verbose=True, model_name=None, authored_optical=False) -> dict:
     stage = Usd.Stage.Open(str(usd_path))
     if stage is None:
         raise RuntimeError(f"cannot open {usd_path}")
@@ -147,7 +147,15 @@ def convert(usd_path: Path, out_dir: Path, *, mass=None, collision=True,
     default_prim = stage.GetDefaultPrim()
     root_path = str(default_prim.GetPath()) if default_prim else "/"
 
-    model_name = sanitize(usd_path.stem)
+    model_name = sanitize(model_name or usd_path.stem)
+    excluded = set()
+    if authored_optical:
+        compute = stage.GetPrimAtPath('/Graph/ROS_TF/ComputePublisherTF')
+        if compute:
+            for path in compute.GetRelationship('inputs:targetPrims').GetTargets():
+                frame = stage.GetPrimAtPath(path)
+                if frame.GetCustomDataByKey('mountPoseStatus') == 'provisional_body_origin':
+                    excluded.add(path)
     mesh_dir = out_dir / "meshes"
     mesh_dir.mkdir(parents=True, exist_ok=True)
 
@@ -188,8 +196,8 @@ def convert(usd_path: Path, out_dir: Path, *, mass=None, collision=True,
     published: dict[str, str] = {}   # prim path -> link name
     order: list = []
 
-    for prim in stage.Traverse():
-        if skipped(prim):
+    for prim in stage.Traverse(Usd.TraverseInstanceProxies()):
+        if skipped(prim) or prim.GetPath() in excluded:
             continue
         if prim.GetTypeName() not in GEOM_TYPES:
             continue
@@ -272,7 +280,7 @@ def convert(usd_path: Path, out_dir: Path, *, mass=None, collision=True,
             stats["faces"] += len(faces)
 
         elif typ == T_CAMERA:
-            intr = read_intrinsics(prim, mpu)
+            intr = None if prim.GetCustomDataByKey('calibrationStatus') == 'pending' else read_intrinsics(prim, mpu)
             if intr:
                 intr["link"] = name
                 cameras.append(intr)
@@ -283,6 +291,8 @@ def convert(usd_path: Path, out_dir: Path, *, mass=None, collision=True,
                           f"model={intr['distortion_model']}")
             else:
                 warnings.append(f"{path}: camera prim without intrinsics")
+            if authored_optical:
+                continue
             # ROS optical frame for the camera link
             optical = unique(f"{name}_optical")
             links[optical] = Link(name=optical, path=path + "/optical")
